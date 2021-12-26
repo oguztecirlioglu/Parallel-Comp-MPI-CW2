@@ -1,0 +1,6 @@
+#!/bin/bash
+
+echo Making, and running $1 
+
+make main
+mpiexec -n $2 ./$1 -d $3 -p $4
