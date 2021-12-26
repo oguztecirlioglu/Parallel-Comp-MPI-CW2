@@ -22,3 +22,6 @@ struct rankRowInfo {
 
 void handleInput(int argc, char *argv[], struct inputStruct *input);
 struct rankRowInfo computeResponsibleRows(int rank, int dimension, int numOfProcs);
+double** allocateMemory(bool *errorCheck, double **bufferAddress, int dimension);
+void initMatrix(double **matrix, int dimension);
+void printMatrix(double **matrix, int dimension);

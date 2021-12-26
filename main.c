@@ -28,6 +28,17 @@ int main(int argc, char** argv) {
         if(firstIteration == true) {
             firstIteration = false;
             
+            bool memoryError = false;
+            double *originalMatrixBuffer;   // Buffer that will be freed at the end. 
+
+            double **originalMatrix = allocateMemory(&memoryError, &originalMatrixBuffer, inputs.dimension);
+
+            if(memoryError == true) {
+                printf("ERROR OCCURRED DURING MEMORY ALLOCATION TO MAIN MATRIX\n");
+            }
+
+            initMatrix(originalMatrix, inputs.dimension);
+            printMatrix(originalMatrix, inputs.dimension);
         }
 
         // Check to see if all other ranks (which are workers) report that they have converged.
@@ -40,11 +51,11 @@ int main(int argc, char** argv) {
         struct rankRowInfo myRankRowInfo = computeResponsibleRows(myrank, inputs.dimension, nproc);
         
         if(firstIteration == true) {
-
+            firstIteration = false;
         }
 
         else if(firstIteration == false) {
-            
+
         }
 
         printf("My rank is %i, Start Row: %i, End Row: %i \n", myRankRowInfo.rank, myRankRowInfo.startRow, myRankRowInfo.endRow);
@@ -125,4 +136,61 @@ struct rankRowInfo computeResponsibleRows(int rank, int dimension, int numOfProc
     result.rank = rank;
 
     return result;
+}
+
+double** allocateMemory(bool *errorCheck, double **bufferAddress, int dimension){
+
+    // Allocate memory for 2-D array of size dimension * dimension.
+    double **a = calloc((long unsigned int) dimension, (long unsigned int) sizeof(double*));
+    if(a == NULL) {
+        printf("ERROR: Could not malloc original list of pointers to memory!\n");
+        *errorCheck = true;
+    }
+
+    double *aBuf = calloc((long unsigned int)dimension, (long unsigned int)dimension*sizeof(double));
+    *bufferAddress = aBuf;
+    if(aBuf == NULL) {
+        printf("ERROR: Could not malloc buffer!\n");
+        *errorCheck = true;
+    }
+
+    for(int i = 0; i < dimension; i++) {
+        a[i] = aBuf + dimension*i;
+    }
+
+    return a;
+}
+
+void initMatrix(double **matrix, int dimension) {
+
+    srand((unsigned)66);    // Seed the random number generator with any random number.
+    // What matters is consistency, and any seed achieves this.
+
+    for(int row = 0; row < dimension; row++) {
+        for(int col = 0; col < dimension; col++) {
+            matrix[row][col] = rand() / ((double) RAND_MAX);
+        }
+    }
+
+    for(int i = 0; i < dimension; i++) {
+        matrix[0][i] = 1;
+        matrix[i][0] = 1;
+
+        // Make the right and bottom border conditions 0.5, so that the matrix isn't symmetric. 
+        if(i < dimension - 1) {
+            matrix[dimension - 1][i+1] = 0.5;
+            matrix[i+1][dimension - 1] = 0.5;
+        }
+
+    }
+}
+
+void printMatrix(double **matrix, int dimension) {
+    for(int row = 0; row < dimension; row++) {
+        for(int col = 0; col < dimension; col++) {
+            printf("%f ", matrix[row][col]);
+        }
+        printf("\n");
+    }
+    printf("\n");
 }
