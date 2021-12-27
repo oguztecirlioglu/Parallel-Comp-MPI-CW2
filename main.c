@@ -16,14 +16,11 @@ int main(int argc, char** argv) {
     MPI_Get_processor_name(name, &namelen);
     
     struct inputStruct inputs;
-    inputs.numOfProcessors = nproc;
+    inputs.totalProcessorCOUNT = nproc;
     handleInput(argc, argv, &inputs);
-
-
 
     /* rank 0 will be the main thread, running all the workers, and checking the precision. */
     if(myrank == 0) {
-        
         // This is the first iteration. Node 0 should generate the random square matrix, cut it up accordingly, and distribute it across the procs. 
         if(firstIteration == true) {
             firstIteration = false;
@@ -41,8 +38,8 @@ int main(int argc, char** argv) {
             initMatrix(originalMatrix, inputs.dimension); // Initialise the matrix. Seeded random values, and non symmetric boundary conditions.
 
             // Now need to allocate the right rows to the right machine. 
-            for(int remoteRank = 1; remoteRank < inputs.numOfProcessors; remoteRank++) {
-                struct rankRowInfo currentInfo = computeResponsibleRows(remoteRank, inputs.dimension, nproc);
+            for(int remoteRank = 1; remoteRank < inputs.totalProcessorCOUNT; remoteRank++) {
+                struct rankRowInfo currentInfo = computeResponsibleRows(remoteRank, inputs.dimension, inputs.totalProcessorCOUNT);
                 int sendCOUNT = (currentInfo.endRow-currentInfo.startRow+1+2) * inputs.dimension;
 
                 //printf("My rank is: %i, start row: %i, end row: %i, send count: %i\n", remoteRank, currentInfo.startRow, currentInfo.endRow, sendCOUNT);
@@ -56,8 +53,8 @@ int main(int argc, char** argv) {
 
         }
     } 
-    else {
-        struct rankRowInfo myRankRowInfo = computeResponsibleRows(myrank, inputs.dimension, nproc);
+    else if (myrank >= 1 && myrank < inputs.totalProcessorCOUNT) {
+        struct rankRowInfo myRankRowInfo = computeResponsibleRows(myrank, inputs.dimension, inputs.totalProcessorCOUNT);
         
         if(firstIteration == true) {
             firstIteration = false;
@@ -70,14 +67,10 @@ int main(int argc, char** argv) {
             double *subMatrixBuffer;
             double **subMatrix = allocateSubMatrixMemory(&memoryError, &subMatrixBuffer, inputs.dimension, height);
 
-            printf("This is rank: %i, receive count: %i, \n", myRankRowInfo.rank, receiveCOUNT);
+            //printf("This is rank: %i, receive count: %i, \n", myRankRowInfo.rank, receiveCOUNT);
             MPI_Recv(subMatrix[0], receiveCOUNT, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             
-            for(int i = 1; i < inputs.numOfProcessors; i++) {
-                if(i == myrank) break;
-                sleep(0.5*i);
-            }
-            printSubMatrix(subMatrix, inputs.dimension, height);
+            //printSubMatrix(subMatrix, inputs.dimension, height);
         }
 
         else if(firstIteration == false) {
@@ -86,8 +79,9 @@ int main(int argc, char** argv) {
 
         //printf("My rank is %i, Start Row: %i, End Row: %i \n", myRankRowInfo.rank, myRankRowInfo.startRow, myRankRowInfo.endRow);
     }
-
+    
     // Finalize the MPI environment.
+    //printf("Rank %i finished.\n", myrank);
     MPI_Finalize();
     return 0;
 }
@@ -114,13 +108,12 @@ void handleInput(int argc, char *argv[], struct inputStruct *input) {
                 break; 
         }
     }
-
+    
     for(; optind < argc; optind++){     
         printf("extra arguments: %s\n", argv[optind]); 
     }
 
     // Check for input errors.
-    
     if(input->dimension <= 3) {
         printf("INPUT ERROR: The dimension you have entered is too little. Setting dimension to 4 (a 4 by 4 square will be used).\n");
         input->dimension = 4;
@@ -131,8 +124,15 @@ void handleInput(int argc, char *argv[], struct inputStruct *input) {
         input->precision = 0.0005;
     }
 
-    if(input->numOfProcessors-1 > input->dimension - 2) {
-        printf("INPUT ERROR: There are too many cores for this job, will only be using %i cores actively.\n", input->dimension - 2);
+    if(input->precision > 0.2) {
+        printf("INPUT ERROR: Desired precision too high, no meaningful computations will be performed. Setting it to 0.01.\n");
+        input->precision = 0.01;
+    }
+    
+    // Check if there are too many processor to compute this matrix, using a row slice method. 
+    if((input->totalProcessorCOUNT - 1) > (input->dimension-2)) {
+        printf("INPUT ERROR: There are too many cores for this job, will only be using %i procs to compute the matrix.\n", input->dimension - 2);
+        input->totalProcessorCOUNT = input->dimension - 1;
     }
 
     //printf("Size is: %i\n", input->dimension);

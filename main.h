@@ -9,7 +9,7 @@
     that need this information. */
 struct inputStruct {
     int dimension;
-    int numOfProcessors;
+    int totalProcessorCOUNT;
     double precision;
 };
 
