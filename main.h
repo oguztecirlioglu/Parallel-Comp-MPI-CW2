@@ -25,3 +25,5 @@ struct rankRowInfo computeResponsibleRows(int rank, int dimension, int numOfProc
 double** allocateMemory(bool *errorCheck, double **bufferAddress, int dimension);
 void initMatrix(double **matrix, int dimension);
 void printMatrix(double **matrix, int dimension);
+double** allocateSubMatrixMemory(bool *errorCheck, double **bufferAddress, int width, int height);
+void printSubMatrix(double **matrix, int width, int height);

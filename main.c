@@ -33,12 +33,21 @@ int main(int argc, char** argv) {
 
             double **originalMatrix = allocateMemory(&memoryError, &originalMatrixBuffer, inputs.dimension);
 
+
             if(memoryError == true) {
                 printf("ERROR OCCURRED DURING MEMORY ALLOCATION TO MAIN MATRIX\n");
             }
 
-            initMatrix(originalMatrix, inputs.dimension);
-            printMatrix(originalMatrix, inputs.dimension);
+            initMatrix(originalMatrix, inputs.dimension); // Initialise the matrix. Seeded random values, and non symmetric boundary conditions.
+
+            // Now need to allocate the right rows to the right machine. 
+            for(int remoteRank = 1; remoteRank < inputs.numOfProcessors; remoteRank++) {
+                struct rankRowInfo currentInfo = computeResponsibleRows(remoteRank, inputs.dimension, nproc);
+                int sendCOUNT = (currentInfo.endRow-currentInfo.startRow+1+2) * inputs.dimension;
+
+                //printf("My rank is: %i, start row: %i, end row: %i, send count: %i\n", remoteRank, currentInfo.startRow, currentInfo.endRow, sendCOUNT);
+                MPI_Send(originalMatrix[currentInfo.startRow-1], sendCOUNT, MPI_DOUBLE, currentInfo.rank, 0, MPI_COMM_WORLD);
+            }
         }
 
         // Check to see if all other ranks (which are workers) report that they have converged.
@@ -52,13 +61,30 @@ int main(int argc, char** argv) {
         
         if(firstIteration == true) {
             firstIteration = false;
+            bool memoryError = false;
+
+            // Get the difference, and then add two, because the boundary condition rows also need to be inserted, and add one because its an inclusive range.
+            int height = myRankRowInfo.endRow - myRankRowInfo.startRow + 2 + 1; 
+            int receiveCOUNT = height * inputs.dimension;
+
+            double *subMatrixBuffer;
+            double **subMatrix = allocateSubMatrixMemory(&memoryError, &subMatrixBuffer, inputs.dimension, height);
+
+            printf("This is rank: %i, receive count: %i, \n", myRankRowInfo.rank, receiveCOUNT);
+            MPI_Recv(subMatrix[0], receiveCOUNT, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            
+            for(int i = 1; i < inputs.numOfProcessors; i++) {
+                if(i == myrank) break;
+                sleep(0.5*i);
+            }
+            printSubMatrix(subMatrix, inputs.dimension, height);
         }
 
         else if(firstIteration == false) {
 
         }
 
-        printf("My rank is %i, Start Row: %i, End Row: %i \n", myRankRowInfo.rank, myRankRowInfo.startRow, myRankRowInfo.endRow);
+        //printf("My rank is %i, Start Row: %i, End Row: %i \n", myRankRowInfo.rank, myRankRowInfo.startRow, myRankRowInfo.endRow);
     }
 
     // Finalize the MPI environment.
@@ -105,7 +131,7 @@ void handleInput(int argc, char *argv[], struct inputStruct *input) {
         input->precision = 0.0005;
     }
 
-    if(input->numOfProcessors > input->dimension - 2) {
+    if(input->numOfProcessors-1 > input->dimension - 2) {
         printf("INPUT ERROR: There are too many cores for this job, will only be using %i cores actively.\n", input->dimension - 2);
     }
 
@@ -161,6 +187,28 @@ double** allocateMemory(bool *errorCheck, double **bufferAddress, int dimension)
     return a;
 }
 
+double** allocateSubMatrixMemory(bool *errorCheck, double **bufferAddress, int width, int height) {
+    double **a = calloc((long unsigned int) height, (long unsigned int) sizeof(double*));
+    if(a == NULL) {
+        printf("ERROR: Could not malloc original list of pointers to memory!\n");
+        *errorCheck = true;
+    }
+
+    double *aBuf = calloc((long unsigned int)height, (long unsigned int)width*sizeof(double));
+    *bufferAddress = aBuf;
+    if(aBuf == NULL) {
+        printf("ERROR: Could not malloc buffer!\n");
+        *errorCheck = true;
+    }
+
+    for(int i = 0; i < height; i++) {
+        a[i] = aBuf + width*i;
+    }
+
+    return a;
+
+}
+
 void initMatrix(double **matrix, int dimension) {
 
     srand((unsigned)66);    // Seed the random number generator with any random number.
@@ -193,4 +241,19 @@ void printMatrix(double **matrix, int dimension) {
         printf("\n");
     }
     printf("\n");
+    printf("\n");
+    printf("\n");
+
+}
+
+void printSubMatrix(double **matrix, int width, int height) {
+    for(int row = 0; row < height; row++) {
+        for(int col = 0; col < width; col++) {
+            printf("%f ", matrix[row][col]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+    printf("\n");
+
 }
