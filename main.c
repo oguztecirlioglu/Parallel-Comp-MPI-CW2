@@ -1,6 +1,8 @@
 #include "main.h" // Include the header files I defined, because the top of this file was too cluttered.
 
 int main(int argc, char** argv) {
+    int allConvergedInFirstIteration = false;
+    int convergedInFirstIteration = false;
     int rc, myrank, nproc, namelen;
     bool firstIteration = true;
     char name[MPI_MAX_PROCESSOR_NAME];
@@ -21,71 +23,140 @@ int main(int argc, char** argv) {
 
     /* rank 0 will be the main thread, running all the workers, and checking the precision. */
     if(myrank == 0) {
-        // This is the first iteration. Node 0 should generate the random square matrix, cut it up accordingly, and distribute it across the procs. 
-        if(firstIteration == true) {
-            firstIteration = false;
-            
-            bool memoryError = false;
-            double *originalMatrixBuffer;   // Buffer that will be freed at the end. 
+        while(allConvergedInFirstIteration == false) {
+            // This is the first iteration. Node 0 should generate the random square matrix, cut it up accordingly, and distribute it across the procs. 
+            if(firstIteration == true) {
+                firstIteration = false;
 
-            double **originalMatrix = allocateMemory(&memoryError, &originalMatrixBuffer, inputs.dimension);
+                bool memoryError = false;
+                double *originalMatrixBuffer;   // Buffer that will be freed at the end. 
+
+                double **originalMatrix = allocateMemory(&memoryError, &originalMatrixBuffer, inputs.dimension);
 
 
-            if(memoryError == true) {
-                printf("ERROR OCCURRED DURING MEMORY ALLOCATION TO MAIN MATRIX\n");
+                if(memoryError == true) {
+                    printf("ERROR OCCURRED DURING MEMORY ALLOCATION TO MAIN MATRIX\n");
+                }
+
+                initMatrix(originalMatrix, inputs.dimension); // Initialise the matrix. Seeded random values, and non symmetric boundary conditions.
+
+                // Now need to allocate the right rows to the right machine. 
+                for(int remoteRank = 1; remoteRank < inputs.totalProcessorCOUNT; remoteRank++) {
+                    struct rankRowInfo currentInfo = computeResponsibleRows(remoteRank, inputs.dimension, inputs.totalProcessorCOUNT);
+                    int sendCOUNT = (currentInfo.endRow-currentInfo.startRow+1+2) * inputs.dimension;
+
+                    MPI_Send(originalMatrix[currentInfo.startRow-1], sendCOUNT, MPI_DOUBLE, currentInfo.rank, 0, MPI_COMM_WORLD);
+                }
+
+                //printf("ORIGINAL MATRIX IS: \n");
+                //printMatrix(originalMatrix, inputs.dimension);
+                //printf("\n");
             }
 
-            initMatrix(originalMatrix, inputs.dimension); // Initialise the matrix. Seeded random values, and non symmetric boundary conditions.
+            // Check to see if all other ranks (which are workers) report that they have converged.
+            // If so, collect the pieces of the matrix, and stitch together.
+            else if(firstIteration == false) {
+                convergedInFirstIteration = true;
+                //printf("in while loop \n");
+                bool allSubMatrixSolved = true;
+                bool localSubMatriSolved = true;
+                MPI_Allreduce(&localSubMatriSolved, &allSubMatrixSolved, 1, MPI_C_BOOL, MPI_LAND, MPI_COMM_WORLD);
 
-            // Now need to allocate the right rows to the right machine. 
-            for(int remoteRank = 1; remoteRank < inputs.totalProcessorCOUNT; remoteRank++) {
-                struct rankRowInfo currentInfo = computeResponsibleRows(remoteRank, inputs.dimension, inputs.totalProcessorCOUNT);
-                int sendCOUNT = (currentInfo.endRow-currentInfo.startRow+1+2) * inputs.dimension;
-
-                //printf("My rank is: %i, start row: %i, end row: %i, send count: %i\n", remoteRank, currentInfo.startRow, currentInfo.endRow, sendCOUNT);
-                MPI_Send(originalMatrix[currentInfo.startRow-1], sendCOUNT, MPI_DOUBLE, currentInfo.rank, 0, MPI_COMM_WORLD);
+                MPI_Allreduce(&convergedInFirstIteration, &allConvergedInFirstIteration, 1, MPI_C_BOOL, MPI_LAND, MPI_COMM_WORLD);
             }
         }
-
-        // Check to see if all other ranks (which are workers) report that they have converged.
-        // If so, collect the pieces of the matrix, and stitch together.
-        else if(firstIteration == false) {
-
-        }
-    } 
-    else if (myrank >= 1 && myrank < inputs.totalProcessorCOUNT) {
-        struct rankRowInfo myRankRowInfo = computeResponsibleRows(myrank, inputs.dimension, inputs.totalProcessorCOUNT);
-        
-        if(firstIteration == true) {
-            firstIteration = false;
-            bool memoryError = false;
-
-            // Get the difference, and then add two, because the boundary condition rows also need to be inserted, and add one because its an inclusive range.
-            int height = myRankRowInfo.endRow - myRankRowInfo.startRow + 2 + 1; 
-            int receiveCOUNT = height * inputs.dimension;
-
-            double *subMatrixBuffer;
-            double **subMatrix = allocateSubMatrixMemory(&memoryError, &subMatrixBuffer, inputs.dimension, height);
-
-            //printf("This is rank: %i, receive count: %i, \n", myRankRowInfo.rank, receiveCOUNT);
-            MPI_Recv(subMatrix[0], receiveCOUNT, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            
-            //printSubMatrix(subMatrix, inputs.dimension, height);
-        }
-
-        else if(firstIteration == false) {
-
-        }
-
-        //printf("My rank is %i, Start Row: %i, End Row: %i \n", myRankRowInfo.rank, myRankRowInfo.startRow, myRankRowInfo.endRow);
+        //printf("Finito\n");
     }
-    
+
+    else if (myrank >= 1 && myrank < inputs.totalProcessorCOUNT) 
+    {
+        bool allSubMatrixSolved = false;
+        bool localSubMatriSolved = false;
+        struct rankRowInfo myRankRowInfo = computeResponsibleRows(myrank, inputs.dimension, inputs.totalProcessorCOUNT);
+
+        // Initialise the subMatrix memory. 
+        bool memoryError = false;
+        int absoluteHeight = myRankRowInfo.endRow - myRankRowInfo.startRow + 2 + 1; // NOT an index, literal height. 
+        double *subMatrixBuffer;
+        double **subMatrix = allocateSubMatrixMemory(&memoryError, &subMatrixBuffer, inputs.dimension, absoluteHeight);
+        
+        // Initialise the read matrix as well.
+        double *writeMatrixBuffer;
+        double **writeMatrix = allocateSubMatrixMemory(&memoryError, &writeMatrixBuffer, inputs.dimension, absoluteHeight);
+
+        while(!allConvergedInFirstIteration) {
+            // Receive the initial matrix from the main proc, including the boundary conditions.
+            if(firstIteration == true) {
+                firstIteration = false;
+
+                // Get the difference, and then add two, because the boundary condition rows also need to be inserted, and add one because its an inclusive range.
+                int receiveCOUNT = absoluteHeight * inputs.dimension;
+
+                // Receive subMatrix from the main proc. 
+                MPI_Recv(subMatrix[0], receiveCOUNT, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                copyMatrix(subMatrix, writeMatrix, inputs.dimension, absoluteHeight);
+            }
+
+                // Start iterating on the subMatrix, and relaxing it. 
+            else if(firstIteration == false) {
+                convergedInFirstIteration = true;
+                int cnt = 0;
+
+                while(!allSubMatrixSolved) {
+                    cnt++;
+                    localSubMatriSolved = true;
+                    for(int row = 1; row < absoluteHeight - 1; row++) {
+                        for(int col = 1; col < inputs.dimension - 1; col++) {
+                            writeMatrix[row][col] = computeNeighborAverage(subMatrix, row, col);
+                            if(fabs(writeMatrix[row][col] - subMatrix[row][col]) > inputs.precision) localSubMatriSolved = false, convergedInFirstIteration = false;
+                        }
+                    }
+                    copyMatrix(writeMatrix, subMatrix, inputs.dimension, absoluteHeight);
+                    // Send out this ranks updated boundary conditions
+                    
+                    if(myrank > 1) 
+                    {
+                        MPI_Send(subMatrix[1], inputs.dimension, MPI_DOUBLE, myrank-1, 0, MPI_COMM_WORLD);
+                    }
+
+                    if(myrank < inputs.totalProcessorCOUNT-1) 
+                    {
+                        MPI_Send(subMatrix[absoluteHeight-2], inputs.dimension, MPI_DOUBLE, myrank+1, 0, MPI_COMM_WORLD);
+                    }
+
+                    // Receive the updated boundary conditions.
+                    if(myrank > 1)
+                    {
+                        printf("rank %i in recv %i\n", myrank, cnt);
+                        MPI_Recv(subMatrix[0], inputs.dimension, MPI_DOUBLE, myrank-1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    }
+
+                    if(myrank < inputs.totalProcessorCOUNT - 1)
+                    {
+                        printf("rank %i in recv %i\n", myrank, cnt);
+                        MPI_Recv(subMatrix[absoluteHeight-1], inputs.dimension, MPI_DOUBLE, myrank+1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    }
+                    
+                    MPI_Allreduce(&localSubMatriSolved, &allSubMatrixSolved, 1, MPI_C_BOOL, MPI_LAND, MPI_COMM_WORLD);
+
+                }
+                
+                
+                MPI_Allreduce(&convergedInFirstIteration, &allConvergedInFirstIteration, 1, MPI_C_BOOL, MPI_LAND, MPI_COMM_WORLD);
+            }
+        }
+        for(int curRank = 1; curRank < inputs.totalProcessorCOUNT; curRank++) {
+            if(myrank == curRank) {
+                sleep(1*curRank);
+                printSubMatrix(subMatrix, inputs.dimension, absoluteHeight);
+            }
+        }
+    }
+
     // Finalize the MPI environment.
-    //printf("Rank %i finished.\n", myrank);
     MPI_Finalize();
     return 0;
 }
-
 
 
 void handleInput(int argc, char *argv[], struct inputStruct *input) {
@@ -119,9 +190,9 @@ void handleInput(int argc, char *argv[], struct inputStruct *input) {
         input->dimension = 4;
     }
 
-    if(input->precision <= 0.0005) {
-        printf("INPUT ERROR: Desired precision too low. Setting it to 0.0005.\n");
-        input->precision = 0.0005;
+    if(input->precision < 0.0001) {
+        printf("INPUT ERROR: Desired precision too low. Setting it to 0.0001.\n");
+        input->precision = 0.0001;
     }
 
     if(input->precision > 0.2) {
@@ -256,4 +327,18 @@ void printSubMatrix(double **matrix, int width, int height) {
     printf("\n");
     printf("\n");
 
+}
+
+/* Deep copies originalMatrix into copyMatrix */
+void copyMatrix(double **originalMatrix, double **copyMatrix, int width, int height) {
+    for(int row = 0; row < height; row++) {
+        for(int col = 0; col < width; col++) {
+            copyMatrix[row][col] = originalMatrix[row][col];
+        }
+    }
+    return;
+}
+
+double computeNeighborAverage(double **matrix, int row, int col) {
+    return (matrix[row-1][col] + matrix[row+1][col] + matrix[row][col+1] + matrix[row][col-1]) / 4;    
 }
